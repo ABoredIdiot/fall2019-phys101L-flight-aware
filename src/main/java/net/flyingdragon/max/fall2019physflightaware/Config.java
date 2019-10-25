@@ -21,6 +21,28 @@ public class Config implements InitializingBean{
 	@Value("${flightaware.baseurl}")
 	String flightAwareBaseUrl;
 
+	@Value("${location1}")
+	String location1;
+
+	@Value("${location2}")
+	String location2;
+
+	@Value("${maxNum:15}")
+	int maxNum;
+
+
+	String getLocaton1Lat(){
+		return location1.substring(0,location1.indexOf(' '));
+	}
+	String getLocaton2Lat(){
+		return location2.substring(0,location2.indexOf(' '));
+	}
+	String getLocaton1Long(){
+		return location1.substring(location1.indexOf(' ') + 1);
+	}
+	String getLocaton2Long(){
+		return location2.substring(location2.indexOf(' ') + 1);
+	}
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		log.info("Configuration: username={}, password={}, url={}", 

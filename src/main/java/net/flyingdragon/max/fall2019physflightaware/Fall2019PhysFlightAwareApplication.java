@@ -55,10 +55,19 @@ public class Fall2019PhysFlightAwareApplication {
 	public CommandLineRunner run(RestTemplate restTemplate) throws Exception {
 		return args -> {
 			String responseString = restTemplate.getForObject(
-					getFlightAwareUrl("SearchBirdseyePositions",
-						"query", "{range lat 37.601258 37.636882} {range lon -122.413616 -122.291737}",
-						"howMany", 15,
-						"uniqueFlights", 0), 
+					getFlightAwareUrl("SetMaximumResultSize",
+							"max_size", Config.get().maxNum),
+					String.class);
+
+			log.info("Response to maxSize: {}", responseString);
+
+			responseString = restTemplate.getForObject(
+					getFlightAwareUrl("SearchBirdseyeInFlight",
+						"query",  String.format("{range lat %s %s} {range lon %s %s}",
+									Config.get().getLocaton1Lat(), Config.get().getLocaton2Lat(),
+									Config.get().getLocaton1Long(), Config.get().getLocaton2Long()),
+						"howMany", Config.get().maxNum,
+						"uniqueFlights", 0),
 					String.class);
 			
 			log.info("Response as string: {}", responseString);
