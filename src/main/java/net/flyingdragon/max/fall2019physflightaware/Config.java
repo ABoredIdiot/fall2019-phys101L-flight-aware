@@ -12,6 +12,9 @@ public class Config implements InitializingBean{
 
 	private static Config sharedInstance;
 	
+	@Value("${loop_interval_secs:300}")
+	int loopInterval_secs;
+	
 	@Value("${flightaware.username}")
 	String flightAwareUsername;
 	
@@ -20,7 +23,14 @@ public class Config implements InitializingBean{
 	
 	@Value("${flightaware.baseurl}")
 	String flightAwareBaseUrl;
+	
+	public static final String FLIGHT_SEARCH_METHOD_BIRDSEYE_IN_FLIGHT="searchBirdseyeInFlight";
+	@Value("${flightaware.flightSearchMethod:searchBirdseyeInFlight}")
+	String flightAwareFlightSearchMethod;
 
+	@Value("${location_name}")
+	String locationName;
+	
 	@Value("${location1}")
 	String location1;
 
@@ -30,6 +40,14 @@ public class Config implements InitializingBean{
 	@Value("${maxNum:15}")
 	int maxNum;
 
+	@Value("${aws.access_key}")
+	String awsAccessKey;
+
+	@Value("${aws.secret_key}")
+	String awsSecretKey;
+	
+	@Value("${admin_users}")
+	public String adminUsers;
 
 	String getLocaton1Lat(){
 		return location1.substring(0,location1.indexOf(' '));
@@ -46,7 +64,10 @@ public class Config implements InitializingBean{
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		log.info("Configuration: username={}, password={}, url={}", 
-				flightAwareUsername, flightAwarePassword, flightAwareBaseUrl);		
+				flightAwareUsername, flightAwarePassword, flightAwareBaseUrl);	
+		
+		System.setProperty("aws.accessKeyId", awsAccessKey);
+		System.setProperty("aws.secretKey", awsSecretKey);
 	}
 	
 	// Constructed by Spring
@@ -54,7 +75,7 @@ public class Config implements InitializingBean{
 		sharedInstance = this;
 	}
 	
-    static Config get() {
+    public static Config get() {
     	if ( sharedInstance == null )
     		sharedInstance = new Config();
     	
