@@ -4,7 +4,6 @@ import java.net.URI;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -54,6 +53,9 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
     
     Set<String> observationsAlreadySaved = new HashSet<>();
     
+    // Default to be 5 minutes ago
+    Date newestFlightFoundSoFar=new Date(System.currentTimeMillis()-1800L*1000);
+    
     SimpleJdbcInsert flightInsertor;
     	
 	public static void main(String[] args) {
@@ -74,11 +76,12 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
 				
 		
 		// Read in the existing observation keys
-		jdbcTemplate.query("SELECT faFlightId || '@' || cast(flight_data->'timestamp' as text) as key FROM flights WHERE flight_info_type='searchBirdseyeInFlight'",
+		jdbcTemplate.query("SELECT faFlightId || '@' || cast(flight_data->'timestamp' as text) as key FROM flights WHERE flight_info_type=?",
+				new Object[] {getConfig().flightAwareFlightSearchMethod},
 				(rs, rowNum) -> observationsAlreadySaved.add(rs.getString("key"))
 				);
 		
-		log.info("Observations laoded from db: {}", observationsAlreadySaved);				
+		log.info("Observations loaded from db: {}", observationsAlreadySaved);				
 	}
 
 	
@@ -97,7 +100,11 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
 		
 		data.put("location", String.format("(%f, %f)", latitude, longitude));
 		
-		flightInsertor.execute(data);
+		try {
+			flightInsertor.execute(data);
+		} catch (Exception e) {
+			log.error("Unable to save flight info: {}", e.getMessage());
+		}
 	}
 	
 	/** 
@@ -138,40 +145,57 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
 		
 		// This will be an array of flight info objects which must have faFlightID and timestamp properties
 		JsonNode allFlightData;
+		int nextPageOffset = 0;
 		
-		if ( getConfig().flightAwareFlightSearchMethod.equals(Config.FLIGHT_SEARCH_METHOD_BIRDSEYE_IN_FLIGHT) ) {
-			searchResult = searchBirdseyeInFlight(restTemplate);
-			allFlightData = searchResult.path("aircraft");
-		} else {
-			throw new IllegalStateException("Unknown searchMethod: " + getConfig().flightAwareFlightSearchMethod);
-		}
+		Date newestFlightFoundInThisBatch=null;
+		
+		while (nextPageOffset >= 0 ) {
+			if ( getConfig().flightAwareFlightSearchMethod.equals(Config.FLIGHT_SEARCH_METHOD_BIRDSEYE_IN_FLIGHT) ) {
+				searchResult = searchBirdseyeInFlight(restTemplate, newestFlightFoundSoFar, nextPageOffset);
+				allFlightData = searchResult.path("aircraft");
+			} else 	if ( getConfig().flightAwareFlightSearchMethod.equals(Config.FLIGHT_SEARCH_METHOD_BIRDSEYE_POSITIONS) ) {
+				searchResult = searchBirdseyePositions(restTemplate, newestFlightFoundSoFar, nextPageOffset);
+				allFlightData = searchResult.path("data");
+			} else {
+				throw new IllegalStateException("Unknown searchMethod: " + getConfig().flightAwareFlightSearchMethod);
+			}
+			if ( searchResult.has("next_offset") )
+					nextPageOffset = searchResult.path("next_offset").intValue();
+			else
+				nextPageOffset = -1;
 
-		for (JsonNode aFlight : allFlightData) {
-			
-			String faFlightId = aFlight.path("faFlightID").asText();
-			long t = aFlight.path("timestamp").asLong();
-			Date t_date = new Date(1000L * t);
-			
-			if ( faFlightId.length()==0 || t==0 ) {
-				log.error("Ignoring invalid flight: faFlightID or timestamp not defined: {}", aFlight);
-				continue;
+			for (JsonNode aFlight : allFlightData) {
+				
+				String faFlightId = aFlight.path("faFlightID").asText();
+				long t = aFlight.path("timestamp").asLong();
+				Date t_date = new Date(1000L * t);
+				
+				if ( newestFlightFoundInThisBatch==null || newestFlightFoundInThisBatch.before(t_date))
+					newestFlightFoundInThisBatch = t_date;
+				
+				if ( faFlightId.length()==0 || t==0 ) {
+					log.error("Ignoring invalid flight: faFlightID or timestamp not defined: {}", aFlight);
+					continue;
+				}
+				
+				String key = String.format("%s@%d", faFlightId, t);
+				log.info("Aircraft key {} ({})", key, t_date);
+				
+				// Skip the ones that are repeats 
+				if ( observationsAlreadySaved.contains(key) )
+				{
+					log.info("==> Repeated");
+					continue;
+				}
+				log.info("==> New: {}", aFlight);
+				
+				saveFlightData(aFlight);
+				// Mark that we've processed it now
+				observationsAlreadySaved.add(key);
 			}
-			
-			String key = String.format("%s@%d", faFlightId, t);
-			log.info("Aircraft key {} ({})", key, t_date);
-			
-			// Skip the ones that are repeats 
-			if ( observationsAlreadySaved.contains(key) )
-			{
-				log.info("==> Repeated");
-				continue;
-			}
-			log.info("==> New: {}", aFlight);
-			
-			saveFlightData(aFlight);
-			// Mark that we've processed it now
-			observationsAlreadySaved.add(key);
 		}
+		if ( newestFlightFoundSoFar==null || newestFlightFoundSoFar.before(newestFlightFoundInThisBatch))
+			newestFlightFoundSoFar = newestFlightFoundInThisBatch;
 	}
 
 	private String fetchFlightAwareResourceAsString(RestTemplate restTemplate, String operation, Object...parametersAndValues ) {
@@ -190,15 +214,17 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
 	 * @param restTemplate
 	 * @return
 	 */
-	public JsonNode searchBirdseyeInFlight(RestTemplate restTemplate) {
-		log.info("Querying for flights in bounds of {}", getConfig().locationName);
-
+	public JsonNode searchBirdseyeInFlight(RestTemplate restTemplate, Date oldestFlightToFind, int pagingOffset) {
+		log.info("Querying for flights after {} in bounds of {}, paging offset {}", oldestFlightToFind, getConfig().locationName, pagingOffset);
+	
 		String responseString = fetchFlightAwareResourceAsString(restTemplate, 
 					"SearchBirdseyeInFlight",
-					"query",  String.format("{range lat %s %s} {range lon %s %s}",
+					"query",  String.format("{range lat %s %s} {range lon %s %s} {> clock %d}",
 							getConfig().getLocaton1Lat(), getConfig().getLocaton2Lat(),
-							getConfig().getLocaton1Long(), getConfig().getLocaton2Long()),
+							getConfig().getLocaton1Long(), getConfig().getLocaton2Long(),
+							oldestFlightToFind.getTime()/1000),
 					"howMany", getConfig().maxNum,
+					"offset", pagingOffset,
 					"uniqueFlights", 0);
 
 		JsonNode responseJsonNode = JsonUtilities.parseJson(responseString);
@@ -206,12 +232,35 @@ public class Fall2019PhysFlightAwareApplication implements InitializingBean {
 		
 		JsonNode result = responseJsonNode.path("SearchBirdseyeInFlightResult");
 		
-		if ( result.path("next_offset").intValue() != -1 ) {
-			throw new IllegalStateException("FlightAware API response requires paging, which we don't know how to do");
-		}
+		return result;
+	}
+	
+	/**
+	 * Returns a JsonNode that contains an array of flights.
+	 * @param restTemplate
+	 * @return
+	 */
+	public JsonNode searchBirdseyePositions(RestTemplate restTemplate, Date oldestFlightToFind, int pagingOffset) {
+		log.info("Querying for flights after {} in bounds of {}, paging offset {}", oldestFlightToFind, getConfig().locationName, pagingOffset);
+
+		String responseString = fetchFlightAwareResourceAsString(restTemplate, 
+					"SearchBirdseyePositions",
+					"query",  String.format("{range lat %s %s} {range lon %s %s} {> clock %d}",
+							getConfig().getLocaton1Lat(), getConfig().getLocaton2Lat(),
+							getConfig().getLocaton1Long(), getConfig().getLocaton2Long(),
+							oldestFlightToFind.getTime()/1000),
+					"howMany", getConfig().maxNum,
+					"offset", pagingOffset,
+					"uniqueFlights", 0);
+
+		JsonNode responseJsonNode = JsonUtilities.parseJson(responseString);
+		log.info("Response as JsonNode: {}", responseJsonNode);
+		
+		JsonNode result = responseJsonNode.path("SearchBirdseyePositionsResult");
 		
 		return result;
 	}
+
 	
 	@Bean
 	public RestTemplate restTemplate() {

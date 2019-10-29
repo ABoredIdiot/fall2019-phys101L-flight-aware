@@ -25,6 +25,7 @@ public class Config implements InitializingBean{
 	String flightAwareBaseUrl;
 	
 	public static final String FLIGHT_SEARCH_METHOD_BIRDSEYE_IN_FLIGHT="searchBirdseyeInFlight";
+	public static final String FLIGHT_SEARCH_METHOD_BIRDSEYE_POSITIONS="searchBirdseyePositions";
 	@Value("${flightaware.flightSearchMethod:searchBirdseyeInFlight}")
 	String flightAwareFlightSearchMethod;
 
@@ -37,7 +38,7 @@ public class Config implements InitializingBean{
 	@Value("${location2}")
 	String location2;
 
-	@Value("${maxNum:15}")
+	@Value("${flightaware.maxNum:15}")
 	int maxNum;
 
 	@Value("${aws.access_key}")
